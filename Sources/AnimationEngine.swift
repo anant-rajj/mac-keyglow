@@ -16,9 +16,7 @@ public enum GlowMode: String, CaseIterable, Identifiable {
     case candleFlicker = "Candle Flame"
     case heartbeat = "Heartbeat"
     case wave = "Wave"
-    case disco = "Disco"
     case morse = "Morse Code"
-    case typingGlow = "Typing Glow"
 
     public var id: String { rawValue }
 
@@ -30,9 +28,7 @@ public enum GlowMode: String, CaseIterable, Identifiable {
         case .candleFlicker: return "flame.fill"
         case .heartbeat: return "heart.fill"
         case .wave: return "water.waves"
-        case .disco: return "sparkles"
         case .morse: return "ellipsis.bubble.fill"
-        case .typingGlow: return "keyboard.fill"
         }
     }
 
@@ -44,9 +40,7 @@ public enum GlowMode: String, CaseIterable, Identifiable {
         case .candleFlicker: return "Organic warm micro-flickering ambient flame"
         case .heartbeat: return "Dual-peak cardiac rhythm"
         case .wave: return "Organic multi-harmonic swell"
-        case .disco: return "Fast rhythmic strobe flash"
         case .morse: return "Optical telegraph message"
-        case .typingGlow: return "Illuminate only when typing"
         }
     }
 }
@@ -65,12 +59,10 @@ public final class AnimationEngine: @unchecked Sendable {
         didSet { minIntensity = max(0.0, min(maxIntensity, minIntensity)) }
     }
     public var morseMessage: String = "SOS"
-    public var typingIdleTimeout: Double = 2.0
 
     private var timer: DispatchSourceTimer?
     private let timerQueue = DispatchQueue(label: "io.github.keyglow.animation", qos: .userInteractive)
     private var startTime: CFAbsoluteTime = 0
-    private var lastKeyTime: CFAbsoluteTime = 0
     private var eventMonitors: [Any] = []
     private let lock = NSLock()
 
@@ -92,16 +84,12 @@ public final class AnimationEngine: @unchecked Sendable {
             startBreathing()
         case .candleFlicker:
             startCandleFlicker()
-        case .disco:
-            startDisco()
         case .heartbeat:
             startHeartbeat()
         case .wave:
             startWave()
         case .morse:
             startMorse(message: morseMessage)
-        case .typingGlow:
-            startTypingGlow()
         }
     }
 
@@ -124,18 +112,15 @@ public final class AnimationEngine: @unchecked Sendable {
 
     // MARK: - 1. Instant Strike (Flash on Press, Instant Zero on Release)
     private func startInstantStrike() {
-        // Start at 0%
         _ = BacklightManager.shared.setBrightness(0.0)
 
         let downMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .rightMouseDown]) { [weak self] _ in
             guard let self = self else { return }
-            // Super-fast instant jump to max
             _ = BacklightManager.shared.setBrightness(self.maxIntensity)
         }
 
         let upMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.keyUp, .leftMouseUp, .rightMouseUp]) { [weak self] _ in
             guard self != nil else { return }
-            // Super-fast instant drop back to 0.0
             _ = BacklightManager.shared.setBrightness(0.0)
         }
 
@@ -174,7 +159,6 @@ public final class AnimationEngine: @unchecked Sendable {
         timer.setEventHandler { [weak self] in
             guard let self = self else { return }
             let targetJitter = Float.random(in: self.minIntensity...self.maxIntensity)
-            // Organic smoothing towards random jitter
             currentVal = currentVal * 0.72 + targetJitter * 0.28
             _ = BacklightManager.shared.setBrightness(currentVal)
         }
@@ -182,36 +166,7 @@ public final class AnimationEngine: @unchecked Sendable {
         self.timer = timer
     }
 
-    // MARK: - 4. Disco / Strobe
-    private func startDisco() {
-        startTime = CFAbsoluteTimeGetCurrent()
-        let frameInterval = 1.0 / 45.0
-        let timer = DispatchSource.makeTimerSource(queue: timerQueue)
-        timer.schedule(deadline: .now(), repeating: frameInterval)
-
-        timer.setEventHandler { [weak self] in
-            guard let self = self else { return }
-            let elapsed = CFAbsoluteTimeGetCurrent() - self.startTime
-            let beatDuration = 60.0 / self.bpm
-            let progressInBeat = (elapsed.truncatingRemainder(dividingBy: beatDuration)) / beatDuration
-
-            let brightness: Float
-            if progressInBeat < 0.25 {
-                let t = Float(progressInBeat / 0.25)
-                brightness = self.maxIntensity * (1.0 - t * 0.4)
-            } else if progressInBeat < 0.50 {
-                let t = Float((progressInBeat - 0.25) / 0.25)
-                brightness = (self.maxIntensity * 0.6) * (1.0 - t)
-            } else {
-                brightness = self.minIntensity
-            }
-            _ = BacklightManager.shared.setBrightness(brightness)
-        }
-        timer.resume()
-        self.timer = timer
-    }
-
-    // MARK: - 5. Heartbeat (Double Peak)
+    // MARK: - 4. Heartbeat (Double Peak)
     private func startHeartbeat() {
         startTime = CFAbsoluteTimeGetCurrent()
         let frameInterval = 1.0 / 40.0
@@ -239,7 +194,7 @@ public final class AnimationEngine: @unchecked Sendable {
         self.timer = timer
     }
 
-    // MARK: - 6. Wave (Harmonic Swell)
+    // MARK: - 5. Wave (Harmonic Swell)
     private func startWave() {
         startTime = CFAbsoluteTimeGetCurrent()
         let frameInterval = 1.0 / 40.0
@@ -262,7 +217,7 @@ public final class AnimationEngine: @unchecked Sendable {
         self.timer = timer
     }
 
-    // MARK: - 7. Morse Code
+    // MARK: - 6. Morse Code
     private func startMorse(message: String) {
         let timeline = MorseEncoder.buildTimeline(for: message, unitDuration: 0.16)
         guard !timeline.isEmpty else { return }
@@ -289,38 +244,6 @@ public final class AnimationEngine: @unchecked Sendable {
             }
 
             let brightness = isHigh ? self.maxIntensity : self.minIntensity
-            _ = BacklightManager.shared.setBrightness(brightness)
-        }
-        timer.resume()
-        self.timer = timer
-    }
-
-    // MARK: - 8. Typing Reactive Glow
-    private func startTypingGlow() {
-        lastKeyTime = CFAbsoluteTimeGetCurrent()
-        _ = BacklightManager.shared.setBrightness(minIntensity)
-
-        let monitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] _ in
-            self?.lastKeyTime = CFAbsoluteTimeGetCurrent()
-        }
-        if let m = monitor { eventMonitors.append(m) }
-
-        let frameInterval = 1.0 / 30.0
-        let timer = DispatchSource.makeTimerSource(queue: timerQueue)
-        timer.schedule(deadline: .now(), repeating: frameInterval)
-
-        timer.setEventHandler { [weak self] in
-            guard let self = self else { return }
-            let idle = CFAbsoluteTimeGetCurrent() - self.lastKeyTime
-            let brightness: Float
-            if idle < 0.25 {
-                brightness = self.maxIntensity
-            } else if idle < self.typingIdleTimeout {
-                let decayRatio = Float((idle - 0.25) / (self.typingIdleTimeout - 0.25))
-                brightness = self.maxIntensity - decayRatio * (self.maxIntensity - self.minIntensity)
-            } else {
-                brightness = self.minIntensity
-            }
             _ = BacklightManager.shared.setBrightness(brightness)
         }
         timer.resume()
