@@ -15,15 +15,21 @@ public final class MenuController: NSObject, NSApplicationDelegate, NSMenuDelega
     private var percentLabel: NSTextField?
     private var modeMenuItems: [GlowMode: NSMenuItem] = [:]
     private var statusHeaderItem: NSMenuItem?
+    private var slideToggleItem: NSMenuItem?
+    private var cornerToggleItem: NSMenuItem?
+    private var peakMenuItems: [Float: NSMenuItem] = [:]
     private var sigintSource: DispatchSourceSignal?
     private var sigtermSource: DispatchSourceSignal?
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
         setupSignalTraps()
         setupStatusItem()
+        // Start Multitouch & Force Touch Trackpad driver
+        TrackpadController.shared.start()
     }
 
     public func applicationWillTerminate(_ notification: Notification) {
+        TrackpadController.shared.stop()
         AnimationEngine.shared.stop()
         BacklightManager.shared.restoreOriginalBrightness()
     }
@@ -40,7 +46,7 @@ public final class MenuController: NSObject, NSApplicationDelegate, NSMenuDelega
         } else {
             button.title = "⌨️"
         }
-        button.toolTip = "KeyGlow — Keyboard Backlight Studio"
+        button.toolTip = "KeyGlow — Keyboard Backlight Studio & Gestures"
 
         let menu = NSMenu()
         menu.delegate = self
@@ -59,6 +65,7 @@ public final class MenuController: NSObject, NSApplicationDelegate, NSMenuDelega
         guard let menu = mainMenu else { return }
         menu.removeAllItems()
         modeMenuItems.removeAll()
+        peakMenuItems.removeAll()
 
         // 1. App Title & Status Header
         let isSupported = BacklightManager.shared.isSupported
@@ -83,11 +90,16 @@ public final class MenuController: NSObject, NSApplicationDelegate, NSMenuDelega
         menu.addItem(statusItem)
         self.statusHeaderItem = statusItem
 
+        // Information "i" button
+        let infoItem = NSMenuItem(title: "ℹ️ How It Works & Gestures Guide...", action: #selector(showInfoClicked), keyEquivalent: "i")
+        infoItem.target = self
+        menu.addItem(infoItem)
+
         menu.addItem(NSMenuItem.separator())
 
         // 2. Interactive Slider Item
         let sliderItem = NSMenuItem()
-        let sliderView = NSView(frame: NSRect(x: 0, y: 0, width: 220, height: 42))
+        let sliderView = NSView(frame: NSRect(x: 0, y: 0, width: 230, height: 42))
 
         let label = NSTextField(labelWithString: "Brightness")
         label.font = NSFont.systemFont(ofSize: 11, weight: .medium)
@@ -99,12 +111,12 @@ public final class MenuController: NSObject, NSApplicationDelegate, NSMenuDelega
         let pLabel = NSTextField(labelWithString: "\(Int(curVal * 100))%")
         pLabel.font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .bold)
         pLabel.alignment = .right
-        pLabel.frame = NSRect(x: 140, y: 22, width: 64, height: 16)
+        pLabel.frame = NSRect(x: 150, y: 22, width: 64, height: 16)
         sliderView.addSubview(pLabel)
         self.percentLabel = pLabel
 
         let s = NSSlider(value: Double(curVal), minValue: 0.0, maxValue: 1.0, target: self, action: #selector(sliderMoved(_:)))
-        s.frame = NSRect(x: 14, y: 4, width: 192, height: 18)
+        s.frame = NSRect(x: 14, y: 4, width: 202, height: 18)
         s.isContinuous = true
         sliderView.addSubview(s)
         self.slider = s
@@ -126,7 +138,46 @@ public final class MenuController: NSObject, NSApplicationDelegate, NSMenuDelega
 
         menu.addItem(NSMenuItem.separator())
 
-        // 3. Effects & Animations
+        // 3. Trackpad & Gestures Controls
+        let gesturesHeader = NSMenuItem(title: "GESTURES & FORCE TOUCH", action: nil, keyEquivalent: "")
+        gesturesHeader.isEnabled = false
+        gesturesHeader.attributedTitle = NSAttributedString(
+            string: "GESTURES & FORCE TOUCH",
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 10, weight: .bold),
+                .foregroundColor: NSColor.secondaryLabelColor
+            ]
+        )
+        menu.addItem(gesturesHeader)
+
+        // Command + Trackpad Slide toggle button
+        let slideItem = NSMenuItem(title: "⌘ + Trackpad Slide Brightness", action: #selector(toggleTrackpadSlide), keyEquivalent: "")
+        slideItem.target = self
+        slideItem.state = TrackpadController.shared.isSlideEnabled ? .on : .off
+        menu.addItem(slideItem)
+        self.slideToggleItem = slideItem
+
+        // Force Touch Corner Pressure toggle button
+        let cornerItem = NSMenuItem(title: "4-Corner Pressure Actions", action: #selector(toggleCornerPressure), keyEquivalent: "")
+        cornerItem.target = self
+        cornerItem.state = TrackpadController.shared.isCornersEnabled ? .on : .off
+        menu.addItem(cornerItem)
+        self.cornerToggleItem = cornerItem
+
+        // Customize Corners Submenu
+        let cornersSubmenu = NSMenu()
+        let cornersMenuItem = NSMenuItem(title: "Customize Pressure Corners", action: nil, keyEquivalent: "")
+        cornersMenuItem.submenu = cornersSubmenu
+
+        addCornerActionSubmenu(to: cornersSubmenu, title: "Top-Left Corner", current: TrackpadController.shared.topLeftAction, selector: #selector(topLeftActionSelected(_:)))
+        addCornerActionSubmenu(to: cornersSubmenu, title: "Top-Right Corner", current: TrackpadController.shared.topRightAction, selector: #selector(topRightActionSelected(_:)))
+        addCornerActionSubmenu(to: cornersSubmenu, title: "Bottom-Left Corner", current: TrackpadController.shared.bottomLeftAction, selector: #selector(bottomLeftActionSelected(_:)))
+        addCornerActionSubmenu(to: cornersSubmenu, title: "Bottom-Right Corner", current: TrackpadController.shared.bottomRightAction, selector: #selector(bottomRightActionSelected(_:)))
+        menu.addItem(cornersMenuItem)
+
+        menu.addItem(NSMenuItem.separator())
+
+        // 4. Effects & Animations
         let effectsHeader = NSMenuItem(title: "ANIMATION MODES", action: nil, keyEquivalent: "")
         effectsHeader.isEnabled = false
         effectsHeader.attributedTitle = NSAttributedString(
@@ -148,10 +199,23 @@ public final class MenuController: NSObject, NSApplicationDelegate, NSMenuDelega
 
         menu.addItem(NSMenuItem.separator())
 
-        // 4. Animation Parameters Configuration
+        // 5. Animation Parameters Configuration
         let configItem = NSMenuItem(title: "Animation Settings", action: nil, keyEquivalent: "")
         let configSubmenu = NSMenu()
         configItem.submenu = configSubmenu
+
+        // Peak Intensity Submenu (Highest brightness up to 100%)
+        let peakItem = NSMenuItem(title: "Peak Brightness (Max Level)", action: nil, keyEquivalent: "")
+        let peakSubmenu = NSMenu()
+        peakItem.submenu = peakSubmenu
+        for (label, peak) in [("100% (Maximum / Full)", 1.0), ("85%", 0.85), ("70%", 0.70), ("50%", 0.50)] {
+            let item = NSMenuItem(title: label, action: #selector(peakSelected(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = Float(peak)
+            peakMenuItems[Float(peak)] = item
+            peakSubmenu.addItem(item)
+        }
+        configSubmenu.addItem(peakItem)
 
         // Speed / BPM Submenu
         let speedItem = NSMenuItem(title: "Tempo (BPM)", action: nil, keyEquivalent: "")
@@ -164,18 +228,6 @@ public final class MenuController: NSObject, NSApplicationDelegate, NSMenuDelega
             speedSubmenu.addItem(item)
         }
         configSubmenu.addItem(speedItem)
-
-        // Peak Intensity Submenu
-        let peakItem = NSMenuItem(title: "Peak Intensity", action: nil, keyEquivalent: "")
-        let peakSubmenu = NSMenu()
-        peakItem.submenu = peakSubmenu
-        for peak in [1.0, 0.85, 0.70, 0.50] {
-            let item = NSMenuItem(title: "\(Int(peak * 100))%", action: #selector(peakSelected(_:)), keyEquivalent: "")
-            item.target = self
-            item.representedObject = Float(peak)
-            peakSubmenu.addItem(item)
-        }
-        configSubmenu.addItem(peakItem)
 
         // Morse message
         let morseSub = NSMenuItem(title: "Morse Beacon Message", action: nil, keyEquivalent: "")
@@ -193,7 +245,7 @@ public final class MenuController: NSObject, NSApplicationDelegate, NSMenuDelega
 
         menu.addItem(NSMenuItem.separator())
 
-        // 5. Actions: Reset & Quit
+        // 6. Actions: Reset & Quit
         let resetItem = NSMenuItem(title: "Reset to Default", action: #selector(resetClicked), keyEquivalent: "r")
         resetItem.target = self
         menu.addItem(resetItem)
@@ -201,6 +253,21 @@ public final class MenuController: NSObject, NSApplicationDelegate, NSMenuDelega
         let quitItem = NSMenuItem(title: "Quit KeyGlow", action: #selector(quitClicked), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
+    }
+
+    private func addCornerActionSubmenu(to parent: NSMenu, title: String, current: CornerAction, selector: Selector) {
+        let menuItem = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        let sub = NSMenu()
+        menuItem.submenu = sub
+
+        for act in CornerAction.allCases {
+            let item = NSMenuItem(title: act.rawValue, action: selector, keyEquivalent: "")
+            item.target = self
+            item.representedObject = act
+            item.state = (act == current) ? .on : .off
+            sub.addItem(item)
+        }
+        parent.addItem(menuItem)
     }
 
     private func updateMenuState() {
@@ -211,6 +278,56 @@ public final class MenuController: NSObject, NSApplicationDelegate, NSMenuDelega
         let activeMode = AnimationEngine.shared.activeMode
         for (mode, item) in modeMenuItems {
             item.state = (mode == activeMode) ? .on : .off
+        }
+
+        slideToggleItem?.state = TrackpadController.shared.isSlideEnabled ? .on : .off
+        cornerToggleItem?.state = TrackpadController.shared.isCornersEnabled ? .on : .off
+
+        let curMax = AnimationEngine.shared.maxIntensity
+        for (peakVal, item) in peakMenuItems {
+            item.state = (abs(peakVal - curMax) < 0.05) ? .on : .off
+        }
+    }
+
+    @objc private func showInfoClicked() {
+        InfoWindow.shared.show()
+    }
+
+    @objc private func toggleTrackpadSlide() {
+        TrackpadController.shared.isSlideEnabled.toggle()
+        updateMenuState()
+    }
+
+    @objc private func toggleCornerPressure() {
+        TrackpadController.shared.isCornersEnabled.toggle()
+        updateMenuState()
+    }
+
+    @objc private func topLeftActionSelected(_ sender: NSMenuItem) {
+        if let act = sender.representedObject as? CornerAction {
+            TrackpadController.shared.topLeftAction = act
+            rebuildMenu()
+        }
+    }
+
+    @objc private func topRightActionSelected(_ sender: NSMenuItem) {
+        if let act = sender.representedObject as? CornerAction {
+            TrackpadController.shared.topRightAction = act
+            rebuildMenu()
+        }
+    }
+
+    @objc private func bottomLeftActionSelected(_ sender: NSMenuItem) {
+        if let act = sender.representedObject as? CornerAction {
+            TrackpadController.shared.bottomLeftAction = act
+            rebuildMenu()
+        }
+    }
+
+    @objc private func bottomRightActionSelected(_ sender: NSMenuItem) {
+        if let act = sender.representedObject as? CornerAction {
+            TrackpadController.shared.bottomRightAction = act
+            rebuildMenu()
         }
     }
 
@@ -252,6 +369,7 @@ public final class MenuController: NSObject, NSApplicationDelegate, NSMenuDelega
     @objc private func peakSelected(_ sender: NSMenuItem) {
         guard let peak = sender.representedObject as? Float else { return }
         AnimationEngine.shared.maxIntensity = peak
+        updateMenuState()
     }
 
     @objc private func morseSelected(_ sender: NSMenuItem) {
@@ -269,6 +387,7 @@ public final class MenuController: NSObject, NSApplicationDelegate, NSMenuDelega
     }
 
     @objc private func quitClicked() {
+        TrackpadController.shared.stop()
         AnimationEngine.shared.stop()
         BacklightManager.shared.restoreOriginalBrightness()
         NSApplication.shared.terminate(nil)
@@ -280,6 +399,7 @@ public final class MenuController: NSObject, NSApplicationDelegate, NSMenuDelega
 
         let sigint = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
         sigint.setEventHandler {
+            TrackpadController.shared.stop()
             AnimationEngine.shared.stop()
             BacklightManager.shared.restoreOriginalBrightness()
             exit(0)
@@ -289,6 +409,7 @@ public final class MenuController: NSObject, NSApplicationDelegate, NSMenuDelega
 
         let sigterm = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
         sigterm.setEventHandler {
+            TrackpadController.shared.stop()
             AnimationEngine.shared.stop()
             BacklightManager.shared.restoreOriginalBrightness()
             exit(0)
@@ -302,10 +423,12 @@ extension GlowMode {
     public var titleWithEmoji: String {
         switch self {
         case .manual: return "Manual (Static Level)"
+        case .instantStrike: return "⚡ Instant Strike (Press Flash)"
         case .breathing: return "🫁 Breathing Glow"
-        case .disco: return "⚡ Disco Strobe"
+        case .candleFlicker: return "🕯️ Candle Flame Flicker"
         case .heartbeat: return "💓 Heartbeat Pulse"
         case .wave: return "🌊 Harmonic Wave"
+        case .disco: return "✨ Disco Strobe"
         case .morse: return "📡 Morse Code Beacon"
         case .typingGlow: return "⌨️ Reactive Typing Glow"
         }

@@ -11,10 +11,12 @@ import Foundation
 
 public enum GlowMode: String, CaseIterable, Identifiable {
     case manual = "Manual"
+    case instantStrike = "Instant Strike (Flash on Press)"
     case breathing = "Breathing"
-    case disco = "Disco"
+    case candleFlicker = "Candle Flame"
     case heartbeat = "Heartbeat"
     case wave = "Wave"
+    case disco = "Disco"
     case morse = "Morse Code"
     case typingGlow = "Typing Glow"
 
@@ -23,10 +25,12 @@ public enum GlowMode: String, CaseIterable, Identifiable {
     public var icon: String {
         switch self {
         case .manual: return "slider.horizontal.3"
+        case .instantStrike: return "bolt.fill"
         case .breathing: return "wind"
-        case .disco: return "sparkles"
+        case .candleFlicker: return "flame.fill"
         case .heartbeat: return "heart.fill"
         case .wave: return "water.waves"
+        case .disco: return "sparkles"
         case .morse: return "ellipsis.bubble.fill"
         case .typingGlow: return "keyboard.fill"
         }
@@ -35,10 +39,12 @@ public enum GlowMode: String, CaseIterable, Identifiable {
     public var subtitle: String {
         switch self {
         case .manual: return "Static brightness level"
+        case .instantStrike: return "Flash to max on keypress, instant zero on release"
         case .breathing: return "Smooth sinusoidal focus pulse"
-        case .disco: return "Fast rhythmic strobe flash"
+        case .candleFlicker: return "Organic warm micro-flickering ambient flame"
         case .heartbeat: return "Dual-peak cardiac rhythm"
         case .wave: return "Organic multi-harmonic swell"
+        case .disco: return "Fast rhythmic strobe flash"
         case .morse: return "Optical telegraph message"
         case .typingGlow: return "Illuminate only when typing"
         }
@@ -65,7 +71,7 @@ public final class AnimationEngine: @unchecked Sendable {
     private let timerQueue = DispatchQueue(label: "io.github.keyglow.animation", qos: .userInteractive)
     private var startTime: CFAbsoluteTime = 0
     private var lastKeyTime: CFAbsoluteTime = 0
-    private var eventMonitor: Any?
+    private var eventMonitors: [Any] = []
     private let lock = NSLock()
 
     private init() {}
@@ -80,8 +86,12 @@ public final class AnimationEngine: @unchecked Sendable {
         switch mode {
         case .manual:
             break
+        case .instantStrike:
+            startInstantStrike()
         case .breathing:
             startBreathing()
+        case .candleFlicker:
+            startCandleFlicker()
         case .disco:
             startDisco()
         case .heartbeat:
@@ -106,13 +116,34 @@ public final class AnimationEngine: @unchecked Sendable {
         timer?.cancel()
         timer = nil
 
-        if let monitor = eventMonitor {
+        for monitor in eventMonitors {
             NSEvent.removeMonitor(monitor)
-            eventMonitor = nil
         }
+        eventMonitors.removeAll()
     }
 
-    // MARK: - 1. Breathing
+    // MARK: - 1. Instant Strike (Flash on Press, Instant Zero on Release)
+    private func startInstantStrike() {
+        // Start at 0%
+        _ = BacklightManager.shared.setBrightness(0.0)
+
+        let downMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            guard let self = self else { return }
+            // Super-fast instant jump to max
+            _ = BacklightManager.shared.setBrightness(self.maxIntensity)
+        }
+
+        let upMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.keyUp, .leftMouseUp, .rightMouseUp]) { [weak self] _ in
+            guard self != nil else { return }
+            // Super-fast instant drop back to 0.0
+            _ = BacklightManager.shared.setBrightness(0.0)
+        }
+
+        if let d = downMonitor { eventMonitors.append(d) }
+        if let u = upMonitor { eventMonitors.append(u) }
+    }
+
+    // MARK: - 2. Breathing
     private func startBreathing() {
         startTime = CFAbsoluteTimeGetCurrent()
         let frameInterval = 1.0 / 40.0
@@ -125,13 +156,33 @@ public final class AnimationEngine: @unchecked Sendable {
             let period = 60.0 / self.bpm
             let phase = (sin(2.0 * .pi * (elapsed / period) - .pi / 2.0) + 1.0) / 2.0
             let brightness = self.minIntensity + Float(phase) * (self.maxIntensity - self.minIntensity)
-            BacklightManager.shared.setBrightness(brightness)
+            _ = BacklightManager.shared.setBrightness(brightness)
         }
         timer.resume()
         self.timer = timer
     }
 
-    // MARK: - 2. Disco / Strobe
+    // MARK: - 3. Candle Flame Flicker
+    private func startCandleFlicker() {
+        startTime = CFAbsoluteTimeGetCurrent()
+        let frameInterval = 1.0 / 35.0
+        let timer = DispatchSource.makeTimerSource(queue: timerQueue)
+        timer.schedule(deadline: .now(), repeating: frameInterval)
+
+        var currentVal: Float = (self.maxIntensity + self.minIntensity) / 2.0
+
+        timer.setEventHandler { [weak self] in
+            guard let self = self else { return }
+            let targetJitter = Float.random(in: self.minIntensity...self.maxIntensity)
+            // Organic smoothing towards random jitter
+            currentVal = currentVal * 0.72 + targetJitter * 0.28
+            _ = BacklightManager.shared.setBrightness(currentVal)
+        }
+        timer.resume()
+        self.timer = timer
+    }
+
+    // MARK: - 4. Disco / Strobe
     private func startDisco() {
         startTime = CFAbsoluteTimeGetCurrent()
         let frameInterval = 1.0 / 45.0
@@ -146,23 +197,21 @@ public final class AnimationEngine: @unchecked Sendable {
 
             let brightness: Float
             if progressInBeat < 0.25 {
-                // Sharp flash attack
                 let t = Float(progressInBeat / 0.25)
                 brightness = self.maxIntensity * (1.0 - t * 0.4)
             } else if progressInBeat < 0.50 {
-                // Decay
                 let t = Float((progressInBeat - 0.25) / 0.25)
                 brightness = (self.maxIntensity * 0.6) * (1.0 - t)
             } else {
                 brightness = self.minIntensity
             }
-            BacklightManager.shared.setBrightness(brightness)
+            _ = BacklightManager.shared.setBrightness(brightness)
         }
         timer.resume()
         self.timer = timer
     }
 
-    // MARK: - 3. Heartbeat (Double Peak)
+    // MARK: - 5. Heartbeat (Double Peak)
     private func startHeartbeat() {
         startTime = CFAbsoluteTimeGetCurrent()
         let frameInterval = 1.0 / 40.0
@@ -176,25 +225,21 @@ public final class AnimationEngine: @unchecked Sendable {
             let pos = elapsed.truncatingRemainder(dividingBy: beatDuration)
 
             var brightness = self.minIntensity
-            // Peak 1 (Systole): 0.0 -> 0.14s
             if pos < 0.14 {
                 let p = sin((pos / 0.14) * .pi)
                 brightness = self.minIntensity + Float(p) * (self.maxIntensity - self.minIntensity)
-            }
-            // Gap: 0.14 -> 0.22s
-            // Peak 2 (Diastole): 0.22 -> 0.36s (lower intensity)
-            else if pos >= 0.22 && pos < 0.36 {
+            } else if pos >= 0.22 && pos < 0.36 {
                 let p = sin(((pos - 0.22) / 0.14) * .pi)
                 let peak2 = (self.maxIntensity - self.minIntensity) * 0.65
                 brightness = self.minIntensity + Float(p) * peak2
             }
-            BacklightManager.shared.setBrightness(brightness)
+            _ = BacklightManager.shared.setBrightness(brightness)
         }
         timer.resume()
         self.timer = timer
     }
 
-    // MARK: - 4. Wave (Harmonic Swell)
+    // MARK: - 6. Wave (Harmonic Swell)
     private func startWave() {
         startTime = CFAbsoluteTimeGetCurrent()
         let frameInterval = 1.0 / 40.0
@@ -211,13 +256,13 @@ public final class AnimationEngine: @unchecked Sendable {
             let combined = (w1 + w2 + 1.35) / 2.7
             let clamped = max(0.0, min(1.0, combined))
             let brightness = self.minIntensity + Float(clamped) * (self.maxIntensity - self.minIntensity)
-            BacklightManager.shared.setBrightness(brightness)
+            _ = BacklightManager.shared.setBrightness(brightness)
         }
         timer.resume()
         self.timer = timer
     }
 
-    // MARK: - 5. Morse Code
+    // MARK: - 7. Morse Code
     private func startMorse(message: String) {
         let timeline = MorseEncoder.buildTimeline(for: message, unitDuration: 0.16)
         guard !timeline.isEmpty else { return }
@@ -244,20 +289,21 @@ public final class AnimationEngine: @unchecked Sendable {
             }
 
             let brightness = isHigh ? self.maxIntensity : self.minIntensity
-            BacklightManager.shared.setBrightness(brightness)
+            _ = BacklightManager.shared.setBrightness(brightness)
         }
         timer.resume()
         self.timer = timer
     }
 
-    // MARK: - 6. Typing Reactive Glow
+    // MARK: - 8. Typing Reactive Glow
     private func startTypingGlow() {
         lastKeyTime = CFAbsoluteTimeGetCurrent()
-        BacklightManager.shared.setBrightness(minIntensity)
+        _ = BacklightManager.shared.setBrightness(minIntensity)
 
-        eventMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] _ in
+        let monitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] _ in
             self?.lastKeyTime = CFAbsoluteTimeGetCurrent()
         }
+        if let m = monitor { eventMonitors.append(m) }
 
         let frameInterval = 1.0 / 30.0
         let timer = DispatchSource.makeTimerSource(queue: timerQueue)
@@ -268,16 +314,14 @@ public final class AnimationEngine: @unchecked Sendable {
             let idle = CFAbsoluteTimeGetCurrent() - self.lastKeyTime
             let brightness: Float
             if idle < 0.25 {
-                // Typing: jump to max
                 brightness = self.maxIntensity
             } else if idle < self.typingIdleTimeout {
-                // Smooth decay
                 let decayRatio = Float((idle - 0.25) / (self.typingIdleTimeout - 0.25))
                 brightness = self.maxIntensity - decayRatio * (self.maxIntensity - self.minIntensity)
             } else {
                 brightness = self.minIntensity
             }
-            BacklightManager.shared.setBrightness(brightness)
+            _ = BacklightManager.shared.setBrightness(brightness)
         }
         timer.resume()
         self.timer = timer
@@ -319,18 +363,15 @@ public enum MorseEncoder {
                     } else if symbol == "-" {
                         segments.append(MorseSegment(isHigh: true, duration: unitDuration * 3.0))
                     }
-                    // Inter-element space
                     if j < code.count - 1 {
                         segments.append(MorseSegment(isHigh: false, duration: unitDuration))
                     }
                 }
-                // Inter-letter space
                 if i < uppercase.count - 1 {
                     segments.append(MorseSegment(isHigh: false, duration: unitDuration * 3.0))
                 }
             }
         }
-        // Trailing word gap
         segments.append(MorseSegment(isHigh: false, duration: unitDuration * 7.0))
         return segments
     }

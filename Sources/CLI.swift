@@ -100,6 +100,16 @@ public enum CLIHandler {
             runAnimationLoop(mode: .wave, bpm: bpm, duration: duration, label: "Harmonic Wave (\(Int(bpm)) BPM)")
             return true
 
+        case "strike", "instant", "flash":
+            let duration = extractDuration(from: arguments)
+            runAnimationLoop(mode: .instantStrike, bpm: 16.0, duration: duration, label: "Instant Strike (Flash to max on keypress, zero on release)")
+            return true
+
+        case "candle", "flame", "flicker":
+            let duration = extractDuration(from: arguments)
+            runAnimationLoop(mode: .candleFlicker, bpm: 30.0, duration: duration, label: "Candle Flame Ambient Micro-Flicker")
+            return true
+
         case "typing", "typingglow":
             let duration = extractDuration(from: arguments)
             runAnimationLoop(mode: .typingGlow, bpm: 16.0, duration: duration, label: "Reactive Typing Glow")
@@ -208,6 +218,8 @@ public enum CLIHandler {
           keyglow disco [bpm] [-d <sec>]   Run high-energy disco strobe effect (default: 120 BPM)
           keyglow heartbeat [bpm] [-d <s]> Run dual-peak cardiac pulse animation (default: 72 BPM)
           keyglow wave [bpm] [-d <sec>]    Run multi-harmonic light wave animation (default: 24 BPM)
+          keyglow strike [-d <sec>]        Super-fast strike (flash to max on press, instant zero on release)
+          keyglow candle [-d <sec>]        Warm organic candle flame micro-flicker
           keyglow typing [-d <sec>]        Illuminate keyboard dynamically while typing
           keyglow morse <msg> [-d <sec>]   Transmit message in optical Morse code (default: SOS)
           keyglow --help                   Show this help manual
