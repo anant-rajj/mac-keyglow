@@ -81,6 +81,32 @@ make install-app
 
 ---
 
+## Uninstallation & Deletion
+
+If you downloaded or installed KeyGlow and wish to remove it from your system:
+
+### Option 1: Via Makefile
+From inside the repository folder, run:
+```bash
+make uninstall
+```
+
+### Option 2: Manual Removal
+To completely stop the application, remove the app bundle, and delete the downloaded files:
+```bash
+# 1. Terminate any running KeyGlow process
+pkill -f "KeyGlow" || true
+
+# 2. Remove the installed app and CLI binary
+rm -rf /Applications/KeyGlow.app
+rm -f /usr/local/bin/keyglow
+
+# 3. Delete the repository directory
+rm -rf ~/mac-keyglow
+```
+
+---
+
 ## License
 
 Distributed under the MIT License.
