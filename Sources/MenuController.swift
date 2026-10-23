@@ -16,7 +16,6 @@ public final class MenuController: NSObject, NSApplicationDelegate, NSMenuDelega
     private var modeMenuItems: [GlowMode: NSMenuItem] = [:]
     private var statusHeaderItem: NSMenuItem?
     private var slideToggleItem: NSMenuItem?
-    private var cornerToggleItem: NSMenuItem?
     private var peakMenuItems: [Float: NSMenuItem] = [:]
     private var sigintSource: DispatchSourceSignal?
     private var sigtermSource: DispatchSourceSignal?
@@ -140,8 +139,6 @@ public final class MenuController: NSObject, NSApplicationDelegate, NSMenuDelega
         maxIcon.contentTintColor = NSColor.secondaryLabelColor
         sliderView.addSubview(maxIcon)
 
-        // Unclipped NSSlider centered between flanker icons
-        // Generous 26pt height guarantees the 20pt circular knob is completely unclipped
         let s = NSSlider(value: Double(curVal), minValue: 0.0, maxValue: 1.0, target: self, action: #selector(sliderMoved(_:)))
         s.frame = NSRect(x: 36, y: 7, width: viewWidth - 72, height: 26)
         s.controlSize = .regular
@@ -167,7 +164,7 @@ public final class MenuController: NSObject, NSApplicationDelegate, NSMenuDelega
 
         menu.addItem(NSMenuItem.separator())
 
-        // 3. Trackpad & Gestures Controls
+        // 3. Trackpad Slide Control
         let gesturesHeader = NSMenuItem(title: "TRACKPAD GESTURES", action: nil, keyEquivalent: "")
         gesturesHeader.isEnabled = false
         gesturesHeader.attributedTitle = NSAttributedString(
@@ -185,24 +182,6 @@ public final class MenuController: NSObject, NSApplicationDelegate, NSMenuDelega
         slideItem.state = TrackpadController.shared.isSlideEnabled ? .on : .off
         menu.addItem(slideItem)
         self.slideToggleItem = slideItem
-
-        let cornerItem = NSMenuItem(title: "4-Corner Pressure Actions", action: #selector(toggleCornerPressure), keyEquivalent: "")
-        cornerItem.target = self
-        cornerItem.image = makeSymbolImage("hand.tap", pointSize: 12)
-        cornerItem.state = TrackpadController.shared.isCornersEnabled ? .on : .off
-        menu.addItem(cornerItem)
-        self.cornerToggleItem = cornerItem
-
-        let cornersSubmenu = NSMenu()
-        let cornersMenuItem = NSMenuItem(title: "Configure Pressure Corners...", action: nil, keyEquivalent: "")
-        cornersMenuItem.image = makeSymbolImage("slider.horizontal.2", pointSize: 12)
-        cornersMenuItem.submenu = cornersSubmenu
-
-        addCornerActionSubmenu(to: cornersSubmenu, title: "Top-Left Corner", iconName: "arrow.up.left", current: TrackpadController.shared.topLeftAction, selector: #selector(topLeftActionSelected(_:)))
-        addCornerActionSubmenu(to: cornersSubmenu, title: "Top-Right Corner", iconName: "arrow.up.right", current: TrackpadController.shared.topRightAction, selector: #selector(topRightActionSelected(_:)))
-        addCornerActionSubmenu(to: cornersSubmenu, title: "Bottom-Left Corner", iconName: "arrow.down.left", current: TrackpadController.shared.bottomLeftAction, selector: #selector(bottomLeftActionSelected(_:)))
-        addCornerActionSubmenu(to: cornersSubmenu, title: "Bottom-Right Corner", iconName: "arrow.down.right", current: TrackpadController.shared.bottomRightAction, selector: #selector(bottomRightActionSelected(_:)))
-        menu.addItem(cornersMenuItem)
 
         menu.addItem(NSMenuItem.separator())
 
@@ -288,22 +267,6 @@ public final class MenuController: NSObject, NSApplicationDelegate, NSMenuDelega
         menu.addItem(quitItem)
     }
 
-    private func addCornerActionSubmenu(to parent: NSMenu, title: String, iconName: String, current: CornerAction, selector: Selector) {
-        let menuItem = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-        menuItem.image = makeSymbolImage(iconName, pointSize: 12)
-        let sub = NSMenu()
-        menuItem.submenu = sub
-
-        for act in CornerAction.allCases {
-            let item = NSMenuItem(title: act.rawValue, action: selector, keyEquivalent: "")
-            item.target = self
-            item.representedObject = act
-            item.state = (act == current) ? .on : .off
-            sub.addItem(item)
-        }
-        parent.addItem(menuItem)
-    }
-
     private func updateMenuState() {
         let current = BacklightManager.shared.getBrightness()
         slider?.doubleValue = Double(current)
@@ -315,7 +278,6 @@ public final class MenuController: NSObject, NSApplicationDelegate, NSMenuDelega
         }
 
         slideToggleItem?.state = TrackpadController.shared.isSlideEnabled ? .on : .off
-        cornerToggleItem?.state = TrackpadController.shared.isCornersEnabled ? .on : .off
 
         let curMax = AnimationEngine.shared.maxIntensity
         for (peakVal, item) in peakMenuItems {
@@ -330,39 +292,6 @@ public final class MenuController: NSObject, NSApplicationDelegate, NSMenuDelega
     @objc private func toggleTrackpadSlide() {
         TrackpadController.shared.isSlideEnabled.toggle()
         updateMenuState()
-    }
-
-    @objc private func toggleCornerPressure() {
-        TrackpadController.shared.isCornersEnabled.toggle()
-        updateMenuState()
-    }
-
-    @objc private func topLeftActionSelected(_ sender: NSMenuItem) {
-        if let act = sender.representedObject as? CornerAction {
-            TrackpadController.shared.topLeftAction = act
-            rebuildMenu()
-        }
-    }
-
-    @objc private func topRightActionSelected(_ sender: NSMenuItem) {
-        if let act = sender.representedObject as? CornerAction {
-            TrackpadController.shared.topRightAction = act
-            rebuildMenu()
-        }
-    }
-
-    @objc private func bottomLeftActionSelected(_ sender: NSMenuItem) {
-        if let act = sender.representedObject as? CornerAction {
-            TrackpadController.shared.bottomLeftAction = act
-            rebuildMenu()
-        }
-    }
-
-    @objc private func bottomRightActionSelected(_ sender: NSMenuItem) {
-        if let act = sender.representedObject as? CornerAction {
-            TrackpadController.shared.bottomRightAction = act
-            rebuildMenu()
-        }
     }
 
     @objc private func sliderMoved(_ sender: NSSlider) {
@@ -462,9 +391,7 @@ extension GlowMode {
         case .candleFlicker: return "Candle Flame Flicker"
         case .heartbeat: return "Heartbeat Pulse"
         case .wave: return "Harmonic Wave"
-        case .disco: return "Disco Strobe"
         case .morse: return "Morse Code Beacon"
-        case .typingGlow: return "Reactive Typing Glow"
         }
     }
 
@@ -476,9 +403,7 @@ extension GlowMode {
         case .candleFlicker: return "flame"
         case .heartbeat: return "waveform.path.ecg"
         case .wave: return "waveform"
-        case .disco: return "sparkles"
         case .morse: return "antenna.radiowaves.left.and.right"
-        case .typingGlow: return "keyboard"
         }
     }
 }

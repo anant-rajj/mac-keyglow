@@ -2,9 +2,8 @@
 //  TrackpadController.swift
 //  KeyGlow
 //
-//  Hardware interface for MacBook Multitouch & Force Touch Trackpad.
-//  Provides Command/Fn + horizontal slide brightness control and
-//  4-corner pressure sensitivity zones with live HUD feedback.
+//  Hardware interface for MacBook Multitouch Trackpad.
+//  Provides Command/Fn + horizontal slide brightness control with native HUD feedback.
 //
 
 import Cocoa
@@ -40,15 +39,6 @@ public struct MTTouch {
     public var zDensity: Float
 }
 
-public enum CornerAction: String, CaseIterable {
-    case toggleMute = "Toggle Backlight On/Off"
-    case turboBoost = "Force Turbo Max 100%"
-    case cycleMode = "Cycle Animation Mode"
-    case strobeBurst = "Instant Strobe Burst"
-    case stepUp = "Brightness +20%"
-    case stepDown = "Brightness -20%"
-}
-
 public final class TrackpadController: NSObject {
     public static let shared = TrackpadController()
 
@@ -56,16 +46,6 @@ public final class TrackpadController: NSObject {
         get { UserDefaults.standard.object(forKey: "KeyGlow_TrackpadSlide") as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: "KeyGlow_TrackpadSlide") }
     }
-
-    public var isCornersEnabled: Bool {
-        get { UserDefaults.standard.object(forKey: "KeyGlow_CornerPressure") as? Bool ?? true }
-        set { UserDefaults.standard.set(newValue, forKey: "KeyGlow_CornerPressure") }
-    }
-
-    public var topLeftAction: CornerAction = .toggleMute
-    public var topRightAction: CornerAction = .turboBoost
-    public var bottomLeftAction: CornerAction = .cycleMode
-    public var bottomRightAction: CornerAction = .strobeBurst
 
     private typealias MTDeviceRef = UnsafeMutableRawPointer
     private typealias MTContactCallback = @convention(c) (UnsafeMutableRawPointer, UnsafeMutableRawPointer, Int32, Double, Int32) -> Int32
@@ -78,9 +58,6 @@ public final class TrackpadController: NSObject {
     private var devices: [MTDeviceRef] = []
     private var trackingFingerID: Int32 = -1
     private var lastX: Float = 0.0
-    private var baselineBrightness: Float = 0.5
-    private var isCornerTriggered = false
-    private var cornerHoldTimer: Timer?
 
     private override init() {
         super.init()
@@ -155,7 +132,6 @@ public final class TrackpadController: NSObject {
         let y = t.normalized.position.y // 0.0 (bottom) to 1.0 (top)
         let state = t.state
         let fingerID = t.fingerID
-        let density = max(0.0, min(1.0, t.zDensity > 0 ? t.zDensity : t.zTotal * 0.15))
 
         if state == 5 || state >= 6 || state == 0 { // touch ended / out of range
             if fingerID == trackingFingerID {
@@ -164,110 +140,13 @@ public final class TrackpadController: NSObject {
             return
         }
 
-        // FEATURE 1: 4-Corner Pressure Sensing
-        if isCornersEnabled && count == 1 && checkCornerPressure(x: x, y: y, pressure: density, state: state) {
-            return
-        }
-
-        // FEATURE 2: ⌘ Command or Fn + Horizontal Trackpad Slide
+        // Command or Fn + Horizontal Trackpad Slide
         if isSlideEnabled && count == 1 && isModifierDown() {
             handleSlide(x: x, y: y, fingerID: fingerID)
         } else {
             if trackingFingerID != -1 && !isModifierDown() {
                 trackingFingerID = -1
             }
-        }
-    }
-
-    private func checkCornerPressure(x: Float, y: Float, pressure: Float, state: Int32) -> Bool {
-        let isLeft = x <= 0.22
-        let isRight = x >= 0.78
-        let isBottom = y <= 0.25
-        let isTop = y >= 0.75
-
-        guard (isLeft || isRight) && (isBottom || isTop) else {
-            if isCornerTriggered && pressure < 0.1 {
-                isCornerTriggered = false
-            }
-            return false
-        }
-
-        let cornerName: String
-        let action: CornerAction
-
-        if isTop && isLeft {
-            cornerName = "🎯 Top-Left Corner"
-            action = topLeftAction
-        } else if isTop && isRight {
-            cornerName = "🔥 Top-Right Corner"
-            action = topRightAction
-        } else if isBottom && isLeft {
-            cornerName = "🎛️ Bottom-Left Corner"
-            action = bottomLeftAction
-        } else {
-            cornerName = "⚡ Bottom-Right Corner"
-            action = bottomRightAction
-        }
-
-        HUDOverlay.shared.showPressure(corner: cornerName, pressure: pressure, action: action.rawValue)
-
-        if pressure >= 0.45 && !isCornerTriggered {
-            isCornerTriggered = true
-            executeCornerAction(action, pressure: pressure)
-        } else if pressure < 0.20 {
-            if isCornerTriggered {
-                if action == .turboBoost {
-                    BacklightManager.shared.restoreOriginalBrightness()
-                }
-                isCornerTriggered = false
-            }
-        }
-
-        return true
-    }
-
-    private func executeCornerAction(_ action: CornerAction, pressure: Float) {
-        switch action {
-        case .toggleMute:
-            let current = BacklightManager.shared.getBrightness()
-            if current > 0.05 {
-                baselineBrightness = current
-                _ = BacklightManager.shared.setBrightness(0.0)
-            } else {
-                _ = BacklightManager.shared.setBrightness(max(0.3, baselineBrightness))
-            }
-
-        case .turboBoost:
-            baselineBrightness = BacklightManager.shared.getBrightness()
-            _ = BacklightManager.shared.setBrightness(1.0)
-
-        case .cycleMode:
-            let modes = GlowMode.allCases
-            let current = AnimationEngine.shared.activeMode
-            if let idx = modes.firstIndex(of: current) {
-                let nextIdx = (idx + 1) % modes.count
-                let nextMode = modes[nextIdx]
-                AnimationEngine.shared.setMode(nextMode)
-            }
-
-        case .strobeBurst:
-            AnimationEngine.shared.setMode(.disco)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                AnimationEngine.shared.stop()
-                BacklightManager.shared.restoreOriginalBrightness()
-            }
-
-        case .stepUp:
-            let cur = BacklightManager.shared.getBrightness()
-            let next = min(1.0, cur + 0.2)
-            _ = BacklightManager.shared.setBrightness(next)
-            HUDOverlay.shared.showBrightness(next, source: "Corner Step +20%")
-
-        case .stepDown:
-            let cur = BacklightManager.shared.getBrightness()
-            let next = max(0.0, cur - 0.2)
-            _ = BacklightManager.shared.setBrightness(next)
-            HUDOverlay.shared.showBrightness(next, source: "Corner Step -20%")
         }
     }
 
@@ -304,8 +183,5 @@ public final class TrackpadController: NSObject {
 
     private func resetTracking() {
         trackingFingerID = -1
-        if isCornerTriggered {
-            isCornerTriggered = false
-        }
     }
 }

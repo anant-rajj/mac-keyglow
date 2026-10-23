@@ -73,15 +73,6 @@ public enum CLIHandler {
             runAnimationLoop(mode: .breathing, bpm: bpm, duration: duration, label: "Breathing (\(Int(bpm)) BPM)")
             return true
 
-        case "disco", "strobe":
-            var bpm = 120.0
-            if arguments.count >= 2, let parsed = Double(arguments[1]) {
-                bpm = parsed
-            }
-            let duration = extractDuration(from: arguments)
-            runAnimationLoop(mode: .disco, bpm: bpm, duration: duration, label: "Disco Strobe (\(Int(bpm)) BPM)")
-            return true
-
         case "heartbeat":
             var bpm = 72.0
             if arguments.count >= 2, let parsed = Double(arguments[1]) {
@@ -110,11 +101,6 @@ public enum CLIHandler {
             runAnimationLoop(mode: .candleFlicker, bpm: 30.0, duration: duration, label: "Candle Flame Ambient Micro-Flicker")
             return true
 
-        case "typing", "typingglow":
-            let duration = extractDuration(from: arguments)
-            runAnimationLoop(mode: .typingGlow, bpm: 16.0, duration: duration, label: "Reactive Typing Glow")
-            return true
-
         case "morse":
             var filtered = arguments.dropFirst().filter { $0 != "-d" && $0 != "--duration" }
             let duration = extractDuration(from: arguments)
@@ -122,114 +108,117 @@ public enum CLIHandler {
                 filtered = filtered.filter { $0 != String(dur) && $0 != String(Int(dur)) }
             }
             let message = !filtered.isEmpty ? filtered.joined(separator: " ") : "SOS"
-            AnimationEngine.shared.morseMessage = message
-            runAnimationLoop(mode: .morse, bpm: 16.0, duration: duration, label: "Morse Code Transmission: \"\(message)\"")
+            runMorseLoop(message: message, duration: duration)
             return true
 
         default:
-            print("Unknown command: '\(cmd)'. Use 'keyglow --help' for available commands.")
+            print("Unknown command '\(arguments[0])'")
+            printUsage()
             return true
         }
     }
 
-    private static func extractDuration(from arguments: [String]) -> Double? {
-        if let idx = arguments.firstIndex(where: { $0 == "--duration" || $0 == "-d" }), idx + 1 < arguments.count {
-            return Double(arguments[idx + 1])
+    private static func extractDuration(from args: [String]) -> Double? {
+        if let idx = args.firstIndex(where: { $0 == "-d" || $0 == "--duration" }), idx + 1 < args.count {
+            return Double(args[idx + 1])
         }
         return nil
     }
 
     private static func showStatus() {
         let isSupported = BacklightManager.shared.isSupported
-        let brightness = BacklightManager.shared.getBrightness()
-        let kbID = BacklightManager.shared.keyboardID
+        let current = BacklightManager.shared.getBrightness()
+        let slideEnabled = TrackpadController.shared.isSlideEnabled
 
-        print("=== KeyGlow Status ===")
-        print("Hardware Supported : \(isSupported ? "Yes (Active)" : "No")")
-        print("Keyboard Device ID : \(kbID)")
-        print(String(format: "Current Brightness : %.0f%% (raw: %.3f)", brightness * 100, brightness))
-        #if arch(arm64)
-        print("Architecture        : Apple Silicon")
-        #else
-        print("Architecture        : Intel x86_64")
-        #endif
+        print("======================================================")
+        print("KeyGlow Status")
+        print("======================================================")
+        print("Hardware Supported : \(isSupported ? "Yes (CoreBrightness client connected)" : "No")")
+        print("Current Brightness : \(Int(round(current * 100)))% (\(String(format: "%.2f", current)))")
+        print("Active Animation   : \(AnimationEngine.shared.activeMode.rawValue)")
+        print("Trackpad Slide     : \(slideEnabled ? "Enabled (Cmd + Horizontal Slide)" : "Disabled")")
+        print("======================================================")
     }
 
     private static func runAnimationLoop(mode: GlowMode, bpm: Double, duration: Double?, label: String) {
-        guard BacklightManager.shared.isSupported else {
-            print("Error: No supported built-in keyboard backlight detected on this Mac.")
-            exit(1)
-        }
-
-        print("Running KeyGlow [\(label)]")
-        if let d = duration {
-            print("Auto-stopping after \(d)s and restoring brightness...\n")
-        } else {
-            print("Press Ctrl+C to stop and restore original brightness.\n")
-        }
-
         AnimationEngine.shared.bpm = bpm
         AnimationEngine.shared.setMode(mode)
-
-        signal(SIGINT, SIG_IGN)
-        signal(SIGTERM, SIG_IGN)
+        print("Running KeyGlow [\(label)]")
+        print("Press Ctrl+C to stop and restore baseline brightness...")
 
         let sigint = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
         sigint.setEventHandler {
-            print("\nStopping animation and restoring keyboard brightness...")
             AnimationEngine.shared.stop()
             BacklightManager.shared.restoreOriginalBrightness()
+            print("\nStopped KeyGlow. Keyboard restored.")
             exit(0)
         }
         sigint.resume()
 
-        let sigterm = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
-        sigterm.setEventHandler {
-            AnimationEngine.shared.stop()
-            BacklightManager.shared.restoreOriginalBrightness()
-            exit(0)
-        }
-        sigterm.resume()
-
-        if let d = duration {
+        if let d = duration, d > 0 {
+            print("Auto-stopping after \(d)s and restoring brightness...")
             DispatchQueue.main.asyncAfter(deadline: .now() + d) {
                 AnimationEngine.shared.stop()
                 BacklightManager.shared.restoreOriginalBrightness()
-                print("Completed \(label). Keyboard restored.")
+                print("\nCompleted \(label). Keyboard restored.")
                 exit(0)
             }
         }
 
-        RunLoop.main.run()
+        dispatchMain()
+    }
+
+    private static func runMorseLoop(message: String, duration: Double?) {
+        AnimationEngine.shared.morseMessage = message
+        AnimationEngine.shared.setMode(.morse)
+        print("Flashing Morse Code: '\(message)'")
+        print("Press Ctrl+C to stop and restore baseline brightness...")
+
+        let sigint = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
+        sigint.setEventHandler {
+            AnimationEngine.shared.stop()
+            BacklightManager.shared.restoreOriginalBrightness()
+            print("\nStopped KeyGlow. Keyboard restored.")
+            exit(0)
+        }
+        sigint.resume()
+
+        if let d = duration, d > 0 {
+            print("Auto-stopping after \(d)s and restoring brightness...")
+            DispatchQueue.main.asyncAfter(deadline: .now() + d) {
+                AnimationEngine.shared.stop()
+                BacklightManager.shared.restoreOriginalBrightness()
+                print("\nCompleted Morse Flash. Keyboard restored.")
+                exit(0)
+            }
+        }
+
+        dispatchMain()
     }
 
     private static func printUsage() {
         print("""
-        KeyGlow — Native macOS Keyboard Backlight & Animation Studio
-        
-        USAGE:
-          keyglow                          Launch native Menu Bar status item app
-          keyglow status                   Display keyboard backlight hardware info & brightness
-          keyglow get                      Print current brightness value (0.00 - 1.00)
-          keyglow set <val>                Set brightness (e.g. '0.75' or '75%')
-          keyglow off                      Turn keyboard backlight completely off
-          keyglow max                      Set keyboard backlight to 100%
-          keyglow breathe [bpm] [-d <sec>] Run smooth sinusoidal breathing glow (default: 16 BPM)
-          keyglow disco [bpm] [-d <sec>]   Run high-energy disco strobe effect (default: 120 BPM)
-          keyglow heartbeat [bpm] [-d <s]> Run dual-peak cardiac pulse animation (default: 72 BPM)
-          keyglow wave [bpm] [-d <sec>]    Run multi-harmonic light wave animation (default: 24 BPM)
-          keyglow strike [-d <sec>]        Super-fast strike (flash to max on press, instant zero on release)
-          keyglow candle [-d <sec>]        Warm organic candle flame micro-flicker
-          keyglow typing [-d <sec>]        Illuminate keyboard dynamically while typing
-          keyglow morse <msg> [-d <sec>]   Transmit message in optical Morse code (default: SOS)
-          keyglow --help                   Show this help manual
-          keyglow --version                Print version information
-        
-        EXAMPLES:
-          keyglow set 50%
-          keyglow breathe 14
-          keyglow disco 130 -d 3           # Strobe for 3 seconds on command or build notification!
-          keyglow morse "SOS" -d 10
-        """)
+Usage: keyglow [command] [options]
+
+Commands:
+  (no args)             Launch Menu Bar status item application
+  --menu, -m            Launch Menu Bar status item application
+  status                Show hardware backlight connection status and current level
+  get                   Print current brightness as float (0.00 to 1.00)
+  set <val>             Set brightness (e.g. 0.5, 75%, 1.0)
+  off                   Turn keyboard backlight off (0%)
+  max                   Set keyboard backlight to maximum (100%)
+  strike                Instant Strike: snap to 100% on key press, 0% on release
+  breathe [bpm]         Breathing pulse animation (default: 16 BPM)
+  candle                Organic warm candle flame micro-flicker
+  heartbeat [bpm]       Dual-peak cardiac rhythm animation (default: 72 BPM)
+  wave [bpm]            Harmonic oscillating wave animation (default: 24 BPM)
+  morse <text>          Transmit text as optical Morse code beacon (default: 'SOS')
+  --version, -v         Display KeyGlow version
+  --help, -h            Show this help reference
+
+Options:
+  -d, --duration <sec>  Run animation for N seconds then auto-restore and exit
+""")
     }
 }
