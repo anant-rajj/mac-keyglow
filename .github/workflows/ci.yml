@@ -1,0 +1,23 @@
+name: Swift Package Build & Release Test
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Build KeyGlow with SwiftPM
+        run: |
+          swift build -c release
+
+      - name: Verify build artifacts
+        run: |
+          test -f .build/release/KeyGlow
+          file .build/release/KeyGlow
